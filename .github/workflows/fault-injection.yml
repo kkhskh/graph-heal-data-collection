@@ -15,7 +15,7 @@ on:
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440  # 24 hours max
+    timeout-minutes: 1440
     
     steps:
     - uses: actions/checkout@v3
