@@ -44,7 +44,7 @@ jobs:
         python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
     
     - name: Upload results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: fault-injection-results
         path: |
