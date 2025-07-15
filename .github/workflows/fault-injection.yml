@@ -1,0 +1,60 @@
+name: Fault Injection Data Collection
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Hours to run'
+        required: true
+        default: '24'
+      services:
+        description: 'Services to inject faults into (space-separated)'
+        required: true
+        default: 'service_a service_b service_c service_d'
+
+jobs:
+  fault-injection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24 hours max
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Start services
+      run: |
+        docker-compose up -d
+        sleep 30
+    
+    - name: Start monitoring
+      run: |
+        python scripts/run_monitoring.py &
+        sleep 10
+    
+    - name: Run fault injection
+      run: |
+        python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
+    
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      with:
+        name: fault-injection-results
+        path: |
+          fault_labels.csv
+          cloud_fault_injection.log
+          metric_data.csv
+        retention-days: 30
+    
+    - name: Clean up
+      if: always()
+      run: |
+        docker-compose down
+        docker system prune -f
