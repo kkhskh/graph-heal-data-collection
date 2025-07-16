@@ -85,6 +85,3 @@ jobs:
       run: |
         docker-compose down
         docker system prune -f 
-      run: |
-        docker-compose down
-        docker system prune -f 
