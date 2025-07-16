@@ -31,13 +31,35 @@ jobs:
     
     - name: Install Docker Compose
       run: |
-        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        sudo chmod +x /usr/local/bin/docker-compose
+        sudo apt-get update
+        sudo apt-get install -y docker-compose-plugin
+        sudo ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
     
+    - name: Build all services (force no-cache)
+      run: |
+        docker-compose build --no-cache
+
     - name: Start services
       run: |
         docker-compose up -d
         sleep 30
+
+    - name: Show container status
+      run: |
+        docker-compose ps
+        docker-compose logs service-a || true
+        docker-compose logs service-b || true
+        docker-compose logs service-c || true
+        docker-compose logs service-d || true
+
+    - name: Wait for all services to be healthy
+      run: |
+        for port in 5001 5002 5003 5004; do
+          echo "Waiting for service on port $port to be ready..."
+          until curl -sf http://localhost:$port/metrics; do sleep 2; done
+          echo "Service on port $port is ready."
+        done
+        echo "All services are healthy."
     
     - name: Start monitoring
       run: |
@@ -62,4 +84,4 @@ jobs:
       if: always()
       run: |
         docker-compose down
-        docker system prune -f
+        docker system prune -f 
