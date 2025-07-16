@@ -33,11 +33,9 @@ def inject_memory_fault(service: str, duration: int):
     
     # Call the service's fault injection endpoint
     try:
-        url = f"http://localhost:{port}/inject_fault"
-        response = requests.post(url, json={
-            "fault_type": "memory",
-            "duration": duration
-        })
+        url = f"http://localhost:{port}/fault/memory"
+        payload = {"duration": duration}
+        response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         logger.info(f"Injected memory fault into {service} for {duration} seconds")
     except requests.RequestException as e:
@@ -53,4 +51,4 @@ def main():
     inject_memory_fault(args.service, args.duration)
 
 if __name__ == '__main__':
-    main() 
+    main()
