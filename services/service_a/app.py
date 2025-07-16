@@ -248,17 +248,16 @@ def inject_memory_fault():
                     simulate_memory_load(duration)
                 except Exception as e:
                     app.logger.error(f"Exception in memory fault thread: {e}", exc_info=True)
+            
             memory_fault_thread = threading.Thread(target=safe_simulate_memory_load, args=(duration,))
             memory_fault_thread.daemon = True
             memory_fault_thread.start()
             response = jsonify({'status': 'memory fault started', 'duration': duration})
+        
+        request_latency.observe(time.time() - start_time)
         return response
     except Exception as e:
-        app.logger.error(f"Error starting memory fault thread: {e}", exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+        app.logger.error(f"Error in memory fault injection: {e}", exc_info=True)
         return "Internal Server Error", 500
 
 if __name__ == '__main__':
