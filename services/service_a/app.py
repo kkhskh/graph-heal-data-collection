@@ -7,6 +7,7 @@ import psutil
 from functools import wraps
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
+import traceback
 
 app = Flask(__name__)
 
@@ -32,6 +33,9 @@ circuit_breaker_state_value = 0  # 0=closed, 1=open, 2=half-open
 cpu_fault_active = False
 cpu_fault_thread = None
 
+memory_fault_active = False
+memory_fault_thread = None
+
 def simulate_cpu_load(duration):
     global cpu_fault_active
     cpu_fault_active = True
@@ -40,6 +44,21 @@ def simulate_cpu_load(duration):
         # Simulate CPU load
         _ = [i * i for i in range(1000)]
     cpu_fault_active = False
+
+def simulate_memory_load(duration):
+    global memory_fault_active
+    memory_fault_active = True
+    end_time = time.time() + duration
+    mem_list = []
+    try:
+        while time.time() < end_time and memory_fault_active:
+            mem_list.append(bytearray(10 * 1024 * 1024))  # Allocate 10MB chunks
+            time.sleep(0.1)
+    except Exception as e:
+        app.logger.error(f"Memory fault error: {e}")
+    finally:
+        mem_list.clear()
+        memory_fault_active = False
 
 def check_dependency_health():
     """Check health of dependent services"""
@@ -116,8 +135,8 @@ def calculate_health_status():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    """Handle all exceptions and increment error counter"""
     request_errors.inc()
+    app.logger.error("Exception occurred", exc_info=True)
     return "Internal Server Error", 500
 
 @app.route('/health')
@@ -203,6 +222,43 @@ def inject_cpu_fault():
     except Exception as e:
         app.logger.error(f"Error in CPU fault injection: {str(e)}")
         request_errors.inc()
+        return "Internal Server Error", 500
+
+@app.route('/fault/memory', methods=['POST'])
+def inject_memory_fault():
+    app.logger.info("/fault/memory endpoint called")
+    try:
+        app.logger.info(f"Request data: {request.data}")
+        data = request.get_json(force=True)
+        app.logger.info(f"Parsed JSON: {data}")
+        duration = data.get('duration', 30)
+        app.logger.info(f"Parsed duration: {duration}")
+    except Exception as e:
+        app.logger.error(f"Error parsing request payload: {e}", exc_info=True)
+        return jsonify({'error': 'Invalid request payload'}), 400
+    global memory_fault_thread, memory_fault_active
+    try:
+        if memory_fault_thread and memory_fault_thread.is_alive():
+            app.logger.info("Memory fault already active")
+            response = jsonify({'status': 'fault already active'})
+        else:
+            app.logger.info("Starting new memory fault thread")
+            def safe_simulate_memory_load(duration):
+                try:
+                    simulate_memory_load(duration)
+                except Exception as e:
+                    app.logger.error(f"Exception in memory fault thread: {e}", exc_info=True)
+            memory_fault_thread = threading.Thread(target=safe_simulate_memory_load, args=(duration,))
+            memory_fault_thread.daemon = True
+            memory_fault_thread.start()
+            response = jsonify({'status': 'memory fault started', 'duration': duration})
+        return response
+    except Exception as e:
+        app.logger.error(f"Error starting memory fault thread: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
         return "Internal Server Error", 500
 
 if __name__ == '__main__':
