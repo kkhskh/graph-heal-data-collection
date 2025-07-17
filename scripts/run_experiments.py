@@ -127,7 +127,7 @@ class ExperimentRunner:
         results = {
             'experiment_id': experiment_id,
             'fault_type': fault_type,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': time.time(), # Use numeric timestamp for calculations
             'target_service': target_service,
             'ground_truth': {
                 'fault_source': target_service,
@@ -282,22 +282,23 @@ class ExperimentRunner:
             if state['status'] == 'unhealthy' or state['health'] == 'unhealthy':
                 if service not in results['ground_truth']['propagated_services']:
                     results['ground_truth']['propagated_services'].append(service)
-                    results['ground_truth']['propagation_delays'][service] = current_time - float(results['timestamp'])
+                    results['ground_truth']['propagation_delays'][service] = current_time - results['timestamp']
         
         # Update graph predictions
         for service in graph_predictions.get('propagated_services', []):
             if service not in results['graph_predictions']['propagated_services']:
                 results['graph_predictions']['propagated_services'].append(service)
-                results['graph_predictions']['propagation_delays'][service] = current_time - float(results['timestamp'])
+                results['graph_predictions']['propagation_delays'][service] = current_time - results['timestamp']
         
         # Update statistical predictions
         for service in stat_predictions.get('propagated_services', []):
             if service not in results['statistical_predictions']['propagated_services']:
                 results['statistical_predictions']['propagated_services'].append(service)
-                results['statistical_predictions']['propagation_delays'][service] = current_time - float(results['timestamp'])
+                results['statistical_predictions']['localization_times'][service] = current_time - results['timestamp']
+                results['statistical_predictions']['propagation_delays'][service] = current_time - results['timestamp']
     
     def _calculate_metrics(self, results: dict):
-        """Calculate metrics for comparing graph-based vs statistical approaches"""
+        """Calculate final performance metrics for the experiment."""
         # Propagation Detection Accuracy
         graph_accuracy = len(set(results['graph_predictions']['propagated_services']) & 
                            set(results['ground_truth']['propagated_services'])) / \
@@ -349,17 +350,21 @@ class ExperimentRunner:
         })
     
     def _save_results(self, results: dict, experiment_id: int, fault_type: str):
-        """Save experiment results and metrics"""
+        """Save experiment results to a JSON file."""
+        # Convert timestamp objects to strings for JSON serialization
+        if isinstance(results.get('timestamp'), float):
+            results['timestamp'] = datetime.fromtimestamp(results['timestamp']).isoformat()
+
         # Create results directory if it doesn't exist
-        os.makedirs('results/processed', exist_ok=True)
+        os.makedirs('results', exist_ok=True)
         
         # Save detailed results
-        results_filename = f'results/processed/{fault_type}_experiment_{experiment_id}.json'
+        results_filename = f'results/{fault_type}_experiment_{experiment_id}.json'
         with open(results_filename, 'w') as f:
             json.dump(results, f, indent=2)
         
         # Save aggregated metrics
-        metrics_filename = f'results/processed/metrics_{fault_type}.json'
+        metrics_filename = f'results/metrics_{fault_type}.json'
         with open(metrics_filename, 'w') as f:
             json.dump(self.metrics, f, indent=2)
         
@@ -422,4 +427,4 @@ def main():
     print("Experiments completed.")
 
 if __name__ == "__main__":
-    main() 
+    main()  
