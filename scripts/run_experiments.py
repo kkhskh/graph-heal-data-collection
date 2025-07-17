@@ -137,6 +137,7 @@ class ExperimentRunner:
                 'cascading_failures': [],
                 'root_causes': [],
                 'detection_times': [],
+                'localization_times': {},
                 'multi_hop_paths': []
             },
             'graph_predictions': {
@@ -145,7 +146,7 @@ class ExperimentRunner:
                 'cross_layer_faults': [],
                 'cascading_failures': [],
                 'root_causes': [],
-                'localization_times': [],
+                'localization_times': {},
                 'multi_hop_paths': []
             },
             'statistical_predictions': {
@@ -154,7 +155,7 @@ class ExperimentRunner:
                 'cross_layer_faults': [],
                 'cascading_failures': [],
                 'root_causes': [],
-                'localization_times': [],
+                'localization_times': {},
                 'multi_hop_paths': []
             }
         }
