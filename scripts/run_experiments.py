@@ -19,10 +19,10 @@ import argparse
 
 # Default service configuration
 DEFAULT_SERVICES = {
-    'service_a': {'port': 5001, 'dependencies': ['service_b', 'service_c']},
-    'service_b': {'port': 5002, 'dependencies': ['service_d']},
-    'service_c': {'port': 5003, 'dependencies': ['service_d']},
-    'service_d': {'port': 5004, 'dependencies': []}
+    'service-a': {'port': 5001, 'dependencies': ['service-b', 'service-c']},
+    'service-b': {'port': 5002, 'dependencies': ['service-d']},
+    'service-c': {'port': 5003, 'dependencies': ['service-d']},
+    'service-d': {'port': 5004, 'dependencies': []}
 }
 
 class ExperimentRunner:
@@ -97,6 +97,9 @@ class ExperimentRunner:
         # Select target service
         if target_service is None:
             target_service = list(self.services.keys())[0]
+
+        # Correct for docker-compose naming convention (e.g., service_a -> service-a)
+        target_service = target_service.replace('_', '-')
         
         # Initialize experiment results
         results = {
@@ -145,7 +148,7 @@ class ExperimentRunner:
         
         # Inject fault using Docker's built-in capabilities
         try:
-            container_name = target_service
+            container_name = target_service.replace('_', '-') # Ensure hyphenated name
             if fault_type == 'cpu':
                 self._docker_update(container_name, cpu_quota=90000)  # 90% CPU limit
             elif fault_type == 'memory':
@@ -164,7 +167,8 @@ class ExperimentRunner:
             for service in self.services:
                 try:
                     # Use docker inspect to get status and health
-                    inspect = subprocess.check_output(["docker", "inspect", service]).decode()
+                    container_name = service.replace('_', '-') # Ensure hyphenated name
+                    inspect = subprocess.check_output(["docker", "inspect", container_name]).decode()
                     import json as _json
                     info = _json.loads(inspect)[0]
                     status = info['State']['Status']
@@ -211,12 +215,13 @@ class ExperimentRunner:
         
         # Clean up
         try:
+            container_name = target_service.replace('_', '-') # Ensure hyphenated name
             if fault_type == 'cpu':
-                self._docker_update(target_service, cpu_quota=0)  # Reset CPU limit
+                self._docker_update(container_name, cpu_quota=0)  # Reset CPU limit
             elif fault_type == 'memory':
-                self._docker_update(target_service, mem_limit='1g', memswap_limit='1g')  # Reset memory limit
+                self._docker_update(container_name, mem_limit='1g', memswap_limit='1g')  # Reset memory limit
             elif fault_type == 'network':
-                self._docker_exec(target_service, ['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'])
+                self._docker_exec(container_name, ['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'])
         except Exception as e:
             print(f"Error cleaning up: {e}")
         
@@ -234,7 +239,7 @@ class ExperimentRunner:
         """Get container metrics using docker stats"""
         try:
             # Map service names to container names
-            container_name = f"service_{container.name.split('_')[-1]}" if container.name.startswith('container_') else container.name
+            container_name = container.name.replace('_', '-') # Ensure hyphenated name
             container = subprocess.check_output(["docker", "inspect", container_name]).decode()
             import json as _json
             info = _json.loads(container)[0]
@@ -365,7 +370,7 @@ def main():
         help='Ending experiment ID. If not provided, it defaults to start_id + num_experiments.'
     )
     parser.add_argument(
-        '--services', type=str, default='service_a service_b service_c service_d',
+        '--services', type=str, default='service-a service-b service-c service-d',
         help='Space-separated list of services to inject faults into.'
     )
     parser.add_argument(
@@ -405,4 +410,4 @@ def main():
     print("Experiments completed.")
 
 if __name__ == "__main__":
-    main()
+    main() 
