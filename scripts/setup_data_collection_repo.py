@@ -56,10 +56,10 @@ def create_data_collection_repo():
 on:
   workflow_dispatch:
     inputs:
-      hours:
-        description: 'Hours to run'
+      num_experiments_per_job:
+        description: 'Number of experiments per fault type per job'
         required: true
-        default: '24'
+        default: '25'
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
@@ -68,44 +68,75 @@ on:
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440  # 24 hours max
-    
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        job_index: [0, 1, 2, 3]
+
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-    
+
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-    
+
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+
+    - name: Build all services (force no-cache)
+      run: |
+        docker-compose build --no-cache
+
     - name: Start services
       run: |
         docker-compose up -d
         sleep 30
-    
+
+    - name: Show container status
+      run: |
+        docker-compose ps
+        docker-compose logs service-a || true
+        docker-compose logs service-b || true
+        docker-compose logs service-c || true
+        docker-compose logs service-d || true
+
+    - name: Wait for all services to be healthy
+      run: |
+        for port in 5001 5002 5003 5004; do
+          echo "Waiting for service on port $port to be ready..."
+          until curl -sf http://localhost:$port/metrics; do sleep 2; done
+          echo "Service on port $port is ready."
+        done
+        echo "All services are healthy."
+
     - name: Start monitoring
       run: |
         python scripts/run_monitoring.py &
         sleep 10
-    
-    - name: Run fault injection
+
+    - name: Run fault injection batch
       run: |
-        python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
-    
+        START_ID=$(( ${{ matrix.job_index }} * ${{ github.event.inputs.num_experiments_per_job }} ))
+        END_ID=$(( (${{ matrix.job_index }} + 1) * ${{ github.event.inputs.num_experiments_per_job }} ))
+        echo "Running experiments from $START_ID to $END_ID"
+        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID
+
     - name: Upload results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: fault-injection-results
+        name: fault-injection-results-${{ matrix.job_index }}
         path: |
-          fault_labels.csv
-          cloud_fault_injection.log
-          metric_data.csv
+          results/
         retention-days: 30
-    
+
     - name: Clean up
       if: always()
       run: |
@@ -124,33 +155,47 @@ This repository is dedicated to running automated fault injection experiments fo
 ## Quick Start
 
 1. **Manual Run**: Clone this repo and run locally
-   ```bash
-   git clone <your-repo-url>
-   cd graph-heal-data-collection
-   pip install -r requirements.txt
-   docker-compose up -d
-   python scripts/cloud_fault_injector.py --hours 24
-   ```
+```bash
+git clone <your-repo-url>
+cd graph-heal-data-collection
+pip install -r requirements.txt
+docker-compose up -d
+
+# Run experiments (example with 10 experiments per job)
+python scripts/run_experiments.py --num-experiments 10 --services "service_a service_b service_c service_d" --duration 300
+```
 
 2. **GitHub Actions**: Use the "Fault Injection Data Collection" workflow
-   - Go to Actions tab
-   - Select "Fault Injection Data Collection"
-   - Click "Run workflow"
-   - Set hours and services as needed
+   * Go to Actions tab
+   * Select "Fault Injection Data Collection"
+   * Click "Run workflow"
+   * Set number of experiments per job (default: 25)
+   * Specify services to test (default: all services)
 
 ## Results
 
-After completion, download the artifacts from the GitHub Actions run:
-- `fault_labels.csv` - Timestamps of all fault injections
-- `cloud_fault_injection.log` - Detailed execution log
-- `metric_data.csv` - Collected metrics during the experiment
+After completion, download the artifacts from the GitHub Actions run. For parallel jobs, there will be multiple artifacts:
+
+* `fault-injection-results-0/` through `fault-injection-results-3/` - Results from each parallel job
+* Each results directory contains:
+  * `processed/` - JSON files with detailed experiment results and metrics
+  * `fault_labels.csv` - Timestamps and details of all fault injections
 
 ## Configuration
 
 Edit the workflow file `.github/workflows/fault-injection.yml` to customize:
-- Duration of experiments
-- Services to inject faults into
-- Fault types and frequencies
+* Number of experiments per job
+* Services to inject faults into
+* Fault types (CPU, memory, network)
+* Job timeout (default: 350 minutes)
+
+## Architecture
+
+The system runs experiments in parallel jobs to stay within GitHub Actions time limits:
+* Each job handles a subset of the total experiments
+* Default: 4 parallel jobs, each running up to 25 experiments per fault type
+* Each experiment tests all specified services with all fault types
+* Results are collected and stored separately for each job
 '''
     
     with open("README.md", "w") as f:
