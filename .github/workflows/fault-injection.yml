@@ -15,7 +15,10 @@ on:
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440
+    timeout-minutes: 360  # 6 hours max per job
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3]  # Split into 4 parallel jobs
     
     steps:
     - uses: actions/checkout@v4
@@ -78,12 +81,15 @@ jobs:
     
     - name: Run fault injection
       run: |
-        python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
+        START_ID=$(( ${{ matrix.batch }} * 25 ))
+        END_ID=$(( START_ID + 24 ))
+        echo "Running experiments from $START_ID to $END_ID"
+        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID --duration $(( ${{ github.event.inputs.hours }} * 3600 / 4 )) --services "${{ github.event.inputs.services }}"
     
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: fault-injection-results
+        name: fault-injection-results-batch-${{ matrix.batch }}
         path: |
           fault_labels.csv
           cloud_fault_injection.log
@@ -95,4 +101,3 @@ jobs:
       run: |
         docker-compose down
         docker system prune -f 
-
