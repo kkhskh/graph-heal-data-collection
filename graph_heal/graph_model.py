@@ -8,6 +8,77 @@ import datetime
 import requests
 from typing import Dict, List, Optional, Tuple, Any
 
+class ServiceGraph:
+    """A simplified graph representation for service dependencies."""
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.services = set()
+        self.dependencies = {}
+        
+    def add_service(self, service_name: str):
+        """Add a service to the graph."""
+        self.services.add(service_name)
+        self.graph.add_node(service_name)
+        if service_name not in self.dependencies:
+            self.dependencies[service_name] = set()
+            
+    def add_dependency(self, service: str, depends_on: str):
+        """Add a dependency between services."""
+        if service not in self.services:
+            self.add_service(service)
+        if depends_on not in self.services:
+            self.add_service(depends_on)
+            
+        self.dependencies[service].add(depends_on)
+        self.graph.add_edge(service, depends_on)
+        
+    def get_dependencies(self, service: str) -> set:
+        """Get all dependencies for a service."""
+        return self.dependencies.get(service, set())
+        
+    def get_dependent_services(self, service: str) -> set:
+        """Get all services that depend on the given service."""
+        dependents = set()
+        for s, deps in self.dependencies.items():
+            if service in deps:
+                dependents.add(s)
+        return dependents
+        
+    def get_all_services(self) -> set:
+        """Get all services in the graph."""
+        return self.services
+
+class RealTimeServiceGraph(ServiceGraph):
+    """Extended service graph with real-time metrics and health status."""
+    def __init__(self):
+        super().__init__()
+        self.health_status = {}
+        self.metrics = {}
+        
+    def update_health(self, service: str, status: str):
+        """Update health status of a service."""
+        self.health_status[service] = status
+        
+    def update_metrics(self, service: str, metrics: Dict[str, Any]):
+        """Update metrics for a service."""
+        self.metrics[service] = metrics
+        
+    def get_health(self, service: str) -> str:
+        """Get health status of a service."""
+        return self.health_status.get(service, "unknown")
+        
+    def get_metrics(self, service: str) -> Dict[str, Any]:
+        """Get metrics for a service."""
+        return self.metrics.get(service, {})
+        
+    def get_unhealthy_services(self) -> set:
+        """Get all services marked as unhealthy."""
+        return {s for s, status in self.health_status.items() if status == "unhealthy"}
+        
+    def get_healthy_services(self) -> set:
+        """Get all services marked as healthy."""
+        return {s for s, status in self.health_status.items() if status == "healthy"}
+
 class Node:
     """
     Represents a service node in the system graph.
