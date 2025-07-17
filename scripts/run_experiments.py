@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from graph_heal.graph_model import ServiceGraph, RealTimeServiceGraph
 from graph_heal.anomaly_detection import AnomalyDetector
-from graph_heal.fault_localization import FaultLocalizer
+from graph_heal.fault_localization import GraphBasedFaultLocalizer
 from graph_heal.recovery_system import EnhancedRecoverySystem
 from graph_heal.recovery.docker_adapter import DockerAdapter
 from graph_heal.recovery.kubernetes_adapter import KubernetesAdapter
@@ -42,7 +42,7 @@ class ExperimentRunner:
         self.services = services if services is not None else DEFAULT_SERVICES
         self.duration_secs = duration_secs
         self.graph = self._initialize_service_graph(self.services)
-        self.graph_analyzer = FaultLocalizer(self.graph)
+        self.graph_analyzer = GraphBasedFaultLocalizer(self.graph)
         self.anomaly_detector = AnomalyDetector(list(self.services.keys()))
         
         adapter_name = os.getenv("RECOVERY_ADAPTER", "docker").lower()
