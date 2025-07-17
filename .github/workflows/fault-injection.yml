@@ -3,10 +3,10 @@ name: Fault Injection Data Collection
 on:
   workflow_dispatch:
     inputs:
-      num_experiments_per_job:
-        description: 'Number of experiments per fault type per job'
+      hours:
+        description: 'Hours to run'
         required: true
-        default: '25'
+        default: '24'
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
@@ -15,23 +15,30 @@ on:
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
-    strategy:
-      fail-fast: false
-      matrix:
-        job_index: [0, 1, 2, 3]
-
+    timeout-minutes: 1440
+    
     steps:
     - uses: actions/checkout@v4
-
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-
+    
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+      with:
+        install: true
+
+    - name: Start Docker daemon
+      run: |
+        sudo systemctl start docker || true
+        sudo systemctl status docker
+        sudo chmod 666 /var/run/docker.sock
 
     - name: Install Docker Compose
       run: |
@@ -63,29 +70,28 @@ jobs:
           echo "Service on port $port is ready."
         done
         echo "All services are healthy."
-
+    
     - name: Start monitoring
       run: |
         python scripts/run_monitoring.py &
         sleep 10
-
-    - name: Run fault injection batch
+    
+    - name: Run fault injection
       run: |
-        START_ID=$(( ${{ matrix.job_index }} * ${{ github.event.inputs.num_experiments_per_job }} ))
-        END_ID=$(( (${{ matrix.job_index }} + 1) * ${{ github.event.inputs.num_experiments_per_job }} ))
-        echo "Running experiments from $START_ID to $END_ID"
-        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID
-
+        python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
+    
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: fault-injection-results-${{ matrix.job_index }}
+        name: fault-injection-results
         path: |
-          results/
+          fault_labels.csv
+          cloud_fault_injection.log
+          metric_data.csv
         retention-days: 30
-
+    
     - name: Clean up
       if: always()
       run: |
         docker-compose down
-        docker system prune -f
+        docker system prune -f 
