@@ -190,15 +190,19 @@ class ExperimentRunner:
                     }
             
             # Update analyzers and get predictions
-            for service, metrics in service_states.items():
-                self.graph_analyzer.update_metrics(service, metrics)
+            # The logic here needs to be corrected. 
+            # First, detect anomalies. Then, localize faults.
+            anomalies = self.anomaly_detector.detect_anomalies(service_states)
             
-            # Get predictions from both approaches
-            graph_predictions = self.graph_analyzer.detect_fault_propagation(
-                target_service,
-                [datetime.fromtimestamp(fault_start_time)]
-            )
+            # The GraphBasedFaultLocalizer does not have `update_metrics`. 
+            # It should be used to localize faults based on anomalies.
+            root_causes = self.graph_analyzer.localize_faults(service_states, anomalies)
             
+            # For the experiment, we care about the root cause predictions
+            graph_predictions = {
+                'root_causes': [cause['service_id'] for cause in root_causes]
+            }
+
             stat_predictions_raw = self.anomaly_detector.detect_anomalies(service_states)
             stat_predictions = {'propagated_services': [a['service_id'] for a in stat_predictions_raw if 'service_id' in a]}
             
