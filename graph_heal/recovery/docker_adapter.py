@@ -1,53 +1,113 @@
-from .base import RecoverySystemAdapter
-import subprocess
-import logging
+name: Fault Injection Data Collection
 
-logger = logging.getLogger(__name__)
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Hours to run'
+        required: true
+        default: '24'
+      services:
+        description: 'Services to inject faults into (space-separated)'
+        required: true
+        default: 'service_a service_b service_c service_d'
 
-class DockerAdapter(RecoverySystemAdapter):
-    def __init__(self, timeout=10):
-        self.timeout = timeout
+jobs:
+  fault-injection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max per job
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3]  # Split into 4 parallel jobs
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
 
-    def restart_service(self, service_name: str, **kwargs):
-        """Restarts a docker container using the CLI."""
-        try:
-            subprocess.run(["docker", "restart", service_name], check=True)
-            logger.info(f"Successfully restarted service: {service_name}")
-            return True
-        except subprocess.CalledProcessError:
-            logger.error(f"Cannot restart service: container {service_name} not found or failed to restart.")
-            return False
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while restarting {service_name}: {e}")
-            return False
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+      with:
+        install: true
 
-    def isolate_service(self, service_name: str, **kwargs):
-        logger.warning(f"Isolate action for service {service_name} is not fully implemented in DockerAdapter.")
-        return False
+    - name: Start Docker daemon
+      run: |
+        sudo systemctl start docker || true
+        sudo systemctl status docker
+        sudo chmod 666 /var/run/docker.sock
 
-    def scale_service(self, service_name: str, **kwargs):
-        """Scales a docker container's resources using the CLI."""
-        try:
-            cmd = ["docker", "update"]
-            if 'cpu_quota' in kwargs and kwargs['cpu_quota'] is not None:
-                cmd.append(f"--cpu-quota={kwargs['cpu_quota']}")
-            if 'memory_limit' in kwargs and kwargs['memory_limit'] is not None:
-                cmd.append(f"--memory={kwargs['memory_limit']}")
-            cmd.append(service_name)
-            if len(cmd) > 3:
-                subprocess.run(cmd, check=True)
-                logger.info(f"Successfully scaled service {service_name} with config: {cmd}")
-                return True
-            else:
-                logger.warning(f"Scale action for {service_name} called with no parameters.")
-                return False
-        except subprocess.CalledProcessError:
-            logger.error(f"Cannot scale service: container {service_name} not found or failed to update.")
-            return False
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while scaling {service_name}: {e}")
-            return False
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
 
-    def degrade_service(self, service_name: str, **kwargs):
-        logger.warning(f"Degrade action for service {service_name} is not implemented in DockerAdapter.")
-        return False 
+    - name: Build all services (force no-cache)
+      run: |
+        docker-compose build --no-cache
+
+    - name: Start services
+      run: |
+        docker-compose up -d
+        sleep 30
+
+    - name: Show container status
+      run: |
+        docker-compose ps
+        docker-compose logs service-a || true
+        docker-compose logs service-b || true
+        docker-compose logs service-c || true
+        docker-compose logs service-d || true
+
+    - name: Wait for all services to be healthy
+      run: |
+        for port in 5001 5002 5003 5004; do
+          echo "Waiting for service on port $port to be ready..."
+          until curl -sf http://localhost:$port/metrics; do sleep 2; done
+          echo "Service on port $port is ready."
+        done
+        echo "All services are healthy."
+    
+    - name: Start monitoring
+      run: |
+        python scripts/run_monitoring.py &
+        sleep 10
+    
+    - name: Run fault injection
+      run: |
+        START_ID=$(( ${{ matrix.batch }} * 25 ))
+        END_ID=$(( START_ID + 24 ))
+        echo "Running experiments from $START_ID to $END_ID"
+        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID --duration $(( ${{ github.event.inputs.hours }} * 3600 / 4 )) --services "${{ github.event.inputs.services }}"
+    
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: fault-injection-results-batch-${{ matrix.batch }}
+        path: |
+          fault_labels.csv
+          cloud_fault_injection.log
+          metric_data.csv
+        retention-days: 30
+    
+    - name: Clean up
+      if: always()
+      run: |
+        docker-compose down
+        docker system prune -f 
+
+    - name: Docker Info (Debug)
+      run: |
+        docker info || true
+        echo "DOCKER_HOST=$DOCKER_HOST"
+        ls -l /var/run/docker.sock || true 
+
+    - name: List running containers (Debug)
+      run: docker ps -a 
+ 
