@@ -13,6 +13,7 @@ from graph_heal.recovery.base import RecoverySystemAdapter
 from graph_heal.recovery.docker_adapter import DockerAdapter
 from graph_heal.recovery.kubernetes_adapter import KubernetesAdapter
 import os
+from .utils import get_docker_client
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ class EnhancedRecoverySystem:
             self.adapter = adapter
         else:
             try:
-                docker_client = docker.from_env()
+                docker_client = get_docker_client()
                 docker_client.ping()
                 self.adapter = DockerAdapter(docker_client)
             except Exception:
@@ -337,3 +338,17 @@ class EnhancedRecoverySystem:
         """
         logger.info("Rollback invoked for %s", action.target_service)
         return True 
+
+def a_test_function_to_check_docker_availability():
+    """
+    This is a test function to check if docker is available, as part of the
+    troubleshooting of the CI/CD pipeline.
+    """
+    try:
+        docker_client = get_docker_client()
+        docker_client.ping()
+        logger.info("Docker is available.")
+        return True
+    except Exception as e:
+        logger.error(f"Docker is not available: {e}")
+        return False  
