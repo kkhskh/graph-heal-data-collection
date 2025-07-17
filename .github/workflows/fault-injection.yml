@@ -3,10 +3,10 @@ name: Fault Injection Data Collection
 on:
   workflow_dispatch:
     inputs:
-      hours:
-        description: 'Hours to run'
+      num_experiments_per_job:
+        description: 'Number of experiments per fault type per job'
         required: true
-        default: '24'
+        default: '25'
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
@@ -15,16 +15,20 @@ on:
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440
-    
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        job_index: [0, 1, 2, 3]
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-    
+
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
@@ -59,28 +63,29 @@ jobs:
           echo "Service on port $port is ready."
         done
         echo "All services are healthy."
-    
+
     - name: Start monitoring
       run: |
         python scripts/run_monitoring.py &
         sleep 10
-    
-    - name: Run fault injection
+
+    - name: Run fault injection batch
       run: |
-        python scripts/cloud_fault_injector.py --hours ${{ github.event.inputs.hours }} --services ${{ github.event.inputs.services }} --label-file fault_labels.csv
-    
+        START_ID=$(( ${{ matrix.job_index }} * ${{ github.event.inputs.num_experiments_per_job }} ))
+        END_ID=$(( (${{ matrix.job_index }} + 1) * ${{ github.event.inputs.num_experiments_per_job }} ))
+        echo "Running experiments from $START_ID to $END_ID"
+        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID
+
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: fault-injection-results
+        name: fault-injection-results-${{ matrix.job_index }}
         path: |
-          fault_labels.csv
-          cloud_fault_injection.log
-          metric_data.csv
+          results/
         retention-days: 30
-    
+
     - name: Clean up
       if: always()
       run: |
         docker-compose down
-        docker system prune -f 
+        docker system prune -f
