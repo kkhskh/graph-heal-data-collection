@@ -33,6 +33,9 @@ class FaultInjector:
         self.is_macos = platform.system() == "Darwin"
         self.services_config = services_config or {}
 
+        # Correct service names to match docker-compose.yml
+        self.service_names = ["service-a", "service-b", "service-c", "service-d"]
+
         # Create data directory if it doesn't exist
         self.data_dir = "data/faults"
         os.makedirs(self.data_dir, exist_ok=True)
@@ -44,33 +47,15 @@ class FaultInjector:
             
     def _get_container_name(self, service_name: str) -> Optional[str]:
         """Find the full container name for a given service."""
-        try:
-            # Explicitly create a client to avoid environment issues
-            client = docker.DockerClient(base_url='unix://var/run/docker.sock')
-            containers = client.containers.list()
-            
-            # Docker-compose typically names containers like <project>_<service>_1
-            # or <project>-<service>-1. We need to find the right one.
-            project_name = os.path.basename(os.getcwd()).replace('_', '').replace('-', '')
+        # This function is now simplified as we assume fixed names
+        if service_name in self.service_names:
+            return service_name
+        else:
+            # Fallback for old names if needed, but we should standardize
+            service_name_hyphenated = service_name.replace('_', '-')
+            if service_name_hyphenated in self.service_names:
+                return service_name_hyphenated
 
-            for container in containers:
-                # A common pattern is project-service-1
-                expected_name_pattern_1 = f"{project_name}-{service_name}-1"
-                # Another common pattern is project_service_1
-                expected_name_pattern_2 = f"{project_name}_{service_name}_1"
-
-                if container.name == expected_name_pattern_1 or container.name == expected_name_pattern_2:
-                    return container.name
-            
-            # Fallback for simpler names or different compose versions
-            for container in containers:
-                if service_name in container.name:
-                    logger.warning(f"Using fallback to find container for '{service_name}', found '{container.name}'")
-                    return container.name
-                    
-        except Exception as e:
-            logger.error(f"Error getting Docker container name for {service_name}: {e}")
-        
         logger.error(f"Could not find a matching container for service: {service_name}")
         return None
 
@@ -85,11 +70,12 @@ class FaultInjector:
         if fault_type not in ["latency", "crash", "cpu_stress", "memory_leak"]:
             raise ValueError(f"Invalid fault type: {fault_type}")
         
-        if not self.services_config:
-            raise ValueError("Service configuration not provided to FaultInjector.")
+        # We don't need services_config if we have the fixed list
+        # if not self.services_config:
+        #     raise ValueError("Service configuration not provided to FaultInjector.")
             
-        if target not in self.services_config:
-            raise ValueError(f"Unknown service in config: {target}")
+        # if target not in self.services_config:
+        #     raise ValueError(f"Unknown service in config: {target}")
 
         container_name = self._get_container_name(target)
         if not container_name:
@@ -171,4 +157,3 @@ class FaultInjector:
         fault_file = os.path.join(self.data_dir, f"fault_{fault['id']}.json")
         with open(fault_file, 'w') as f:
             json.dump(fault, f, indent=2)
-
