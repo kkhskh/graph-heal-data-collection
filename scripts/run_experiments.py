@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import json
 import time
+import csv
 from datetime import datetime
 import numpy as np
 import docker
@@ -14,9 +15,10 @@ from graph_heal.recovery_system import EnhancedRecoverySystem
 from graph_heal.recovery.docker_adapter import DockerAdapter
 from graph_heal.recovery.kubernetes_adapter import KubernetesAdapter
 from graph_heal.service_monitor import ServiceMonitor
+import argparse
 
-# Service configuration based on existing Docker services
-SERVICES = {
+# Default service configuration
+DEFAULT_SERVICES = {
     'service_a': {'port': 5001, 'dependencies': ['service_b', 'service_c']},
     'service_b': {'port': 5002, 'dependencies': ['service_d']},
     'service_c': {'port': 5003, 'dependencies': ['service_d']},
@@ -24,23 +26,25 @@ SERVICES = {
 }
 
 class ExperimentRunner:
-    def _initialize_service_graph(self) -> ServiceGraph:
+    def _initialize_service_graph(self, services) -> ServiceGraph:
         """Initialize the service graph with nodes and dependencies"""
         graph = ServiceGraph()
         # Add all services as nodes
-        for service_name in SERVICES:
+        for service_name in services:
             graph.add_service(service_name)
         # Add dependencies based on configuration
-        for service_name, config in SERVICES.items():
+        for service_name, config in services.items():
             for dep in config['dependencies']:
                 graph.add_dependency(service_name, dep)
         return graph
 
-    def __init__(self, services, duration_secs=60):
+    def __init__(self, services=None, duration_secs=300):
+        self.services = services if services is not None else DEFAULT_SERVICES
+        self.duration_secs = duration_secs
         self.docker_client = docker.from_env()
-        self.graph = self._initialize_service_graph()
+        self.graph = self._initialize_service_graph(self.services)
         self.graph_analyzer = FaultLocalizer(self.graph)
-        self.anomaly_detector = AnomalyDetector(services.keys())
+        self.anomaly_detector = AnomalyDetector(self.services.keys())
         
         adapter_name = os.getenv("RECOVERY_ADAPTER", "docker").lower()
         if adapter_name == "kubernetes":
@@ -49,9 +53,9 @@ class ExperimentRunner:
             adapter = DockerAdapter()
 
         self.recovery_system = EnhancedRecoverySystem(self.graph, adapter=adapter)
-        
-        self.monitor = ServiceMonitor(services, self.docker_client)
+        self.monitor = ServiceMonitor(self.services, self.docker_client)
         self.event_log = []
+        self.fault_labels = []
         
         # Initialize metrics storage
         self.metrics = {
@@ -69,17 +73,22 @@ class ExperimentRunner:
             }
         }
         
-    def run_experiment(self, experiment_id: int, fault_type: str = 'cpu'):
+    def run_experiment(self, experiment_id: int, fault_type: str = 'cpu', target_service: str = None):
         """Run a single experiment and collect metrics"""
         print(f"\nRunning experiment {experiment_id} with {fault_type} fault...")
+        
+        # Select target service
+        if target_service is None:
+            target_service = list(self.services.keys())[0]
         
         # Initialize experiment results
         results = {
             'experiment_id': experiment_id,
             'fault_type': fault_type,
             'timestamp': datetime.now().isoformat(),
+            'target_service': target_service,
             'ground_truth': {
-                'fault_source': 'service_a',
+                'fault_source': target_service,
                 'propagated_services': [],
                 'propagation_delays': {},
                 'cross_layer_faults': [],
@@ -108,13 +117,18 @@ class ExperimentRunner:
             }
         }
         
-        # Inject fault and collect ground truth
-        fault_service = 'service_a'
+        # Record fault injection in labels
         fault_start_time = time.time()
+        self.fault_labels.append({
+            'timestamp': datetime.fromtimestamp(fault_start_time).isoformat(),
+            'service': target_service,
+            'fault_type': fault_type,
+            'duration': self.duration_secs
+        })
         
         # Inject fault using Docker's built-in capabilities
         try:
-            container_name = f"service_{fault_service.split('_')[-1]}"
+            container_name = target_service
             container = self.docker_client.containers.get(container_name)
             if fault_type == 'cpu':
                 container.update(cpu_quota=90000)  # 90% CPU limit
@@ -128,10 +142,10 @@ class ExperimentRunner:
         
         # Monitor propagation and collect metrics
         propagation_start = time.time()
-        while time.time() - propagation_start < 60:  # Monitor for 60 seconds
+        while time.time() - propagation_start < self.duration_secs:
             # Get current service states
             service_states = {}
-            for service in ['service_a', 'service_b', 'service_c', 'service_d']:
+            for service in self.services:
                 try:
                     container = self.docker_client.containers.get(service)
                     service_states[service] = {
@@ -155,7 +169,7 @@ class ExperimentRunner:
             
             # Get predictions from both approaches
             graph_predictions = self.graph_analyzer.detect_fault_propagation(
-                fault_service,
+                target_service,
                 [datetime.fromtimestamp(fault_start_time)]
             )
             
@@ -175,7 +189,7 @@ class ExperimentRunner:
         
         # Clean up
         try:
-            container = self.docker_client.containers.get(fault_service)
+            container = self.docker_client.containers.get(target_service)
             if fault_type == 'cpu':
                 container.update(cpu_quota=0)  # Reset CPU limit
             elif fault_type == 'memory':
@@ -186,6 +200,14 @@ class ExperimentRunner:
             print(f"Error cleaning up: {e}")
         
         return results
+
+    def save_fault_labels(self, output_file='fault_labels.csv'):
+        """Save fault injection labels to CSV file"""
+        with open(output_file, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['timestamp', 'service', 'fault_type', 'duration'])
+            writer.writeheader()
+            writer.writerows(self.fault_labels)
+        print(f"Fault labels saved to {output_file}")
     
     def _get_container_metrics(self, container, metric_type):
         """Get container metrics using docker stats"""
@@ -306,16 +328,59 @@ class ExperimentRunner:
         print(f"Metrics saved to {metrics_filename}")
 
 def main():
+    """Main function to run experiments"""
+    parser = argparse.ArgumentParser(description="Run fault injection experiments.")
+    parser.add_argument(
+        '--num-experiments', type=int, default=100,
+        help='Total number of experiments to run for each fault type.'
+    )
+    parser.add_argument(
+        '--start-id', type=int, default=0,
+        help='Starting experiment ID.'
+    )
+    parser.add_argument(
+        '--end-id', type=int, default=None,
+        help='Ending experiment ID. If not provided, it defaults to start_id + num_experiments.'
+    )
+    parser.add_argument(
+        '--services', type=str, default='service_a service_b service_c service_d',
+        help='Space-separated list of services to inject faults into.'
+    )
+    parser.add_argument(
+        '--duration', type=int, default=300,
+        help='Duration in seconds for each fault injection experiment.'
+    )
+    args = parser.parse_args()
+
+    if args.end_id is None:
+        args.end_id = args.start_id + args.num_experiments
+
+    # Parse services into the required format
+    service_list = args.services.split()
+    services = {}
+    for service in service_list:
+        if service in DEFAULT_SERVICES:
+            services[service] = DEFAULT_SERVICES[service]
+    
+    if not services:
+        print("No valid services specified. Using default services.")
+        services = DEFAULT_SERVICES
+
     # Initialize experiment runner
-    runner = ExperimentRunner(SERVICES)
+    runner = ExperimentRunner(services=services, duration_secs=args.duration)
     
-    # Run experiments with different fault types
     fault_types = ['cpu', 'memory', 'network']
-    for fault_type in fault_types:
-        for i in range(1, 3):  # Run 2 experiments per fault type
-            runner.run_experiment(i, fault_type)
     
-    print("\nAll experiments completed!")
+    print(f"Running experiments from ID {args.start_id} to {args.end_id - 1}...")
+
+    for i in range(args.start_id, args.end_id):
+        for fault in fault_types:
+            for service in services:
+                runner.run_experiment(experiment_id=i, fault_type=fault, target_service=service)
+    
+    # Save fault labels
+    runner.save_fault_labels()
+    print("Experiments completed.")
 
 if __name__ == "__main__":
-    main()  
+    main()   
