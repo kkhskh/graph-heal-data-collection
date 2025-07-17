@@ -43,7 +43,7 @@ class ExperimentRunner:
         self.duration_secs = duration_secs
         self.graph = self._initialize_service_graph(self.services)
         self.graph_analyzer = GraphBasedFaultLocalizer(self.graph)
-        self.anomaly_detector = AnomalyDetector(list(self.services.keys()))
+        self.anomaly_detector = AnomalyDetector()
         
         adapter_name = os.getenv("RECOVERY_ADAPTER", "docker").lower()
         if adapter_name == "kubernetes":
@@ -405,4 +405,4 @@ def main():
     print("Experiments completed.")
 
 if __name__ == "__main__":
-    main() 
+    main()
