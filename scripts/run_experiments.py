@@ -9,7 +9,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from graph_heal.graph_model import ServiceGraph, RealTimeServiceGraph
-from graph_heal.anomaly_detection import AnomalyDetector
+from graph_heal.anomaly_detection import StatisticalAnomalyDetector
 from graph_heal.fault_localization import GraphBasedFaultLocalizer
 from graph_heal.recovery_system import EnhancedRecoverySystem
 from graph_heal.recovery.docker_adapter import DockerAdapter
@@ -43,7 +43,7 @@ class ExperimentRunner:
         self.duration_secs = duration_secs
         self.graph = self._initialize_service_graph(self.services)
         self.graph_analyzer = GraphBasedFaultLocalizer(self.graph)
-        self.anomaly_detector = AnomalyDetector()
+        self.anomaly_detector = StatisticalAnomalyDetector()
         
         adapter_name = os.getenv("RECOVERY_ADAPTER", "docker").lower()
         if adapter_name == "kubernetes":
