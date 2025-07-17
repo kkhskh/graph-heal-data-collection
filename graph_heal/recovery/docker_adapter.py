@@ -1,12 +1,11 @@
-from .base import RecoveryAdapter
+from .base import RecoverySystemAdapter
 import docker
 import logging
-from .base import RecoveryAdapter
 from graph_heal.utils import get_docker_client
 
 logger = logging.getLogger(__name__)
 
-class DockerAdapter(RecoveryAdapter):
+class DockerAdapter(RecoverySystemAdapter):
     def __init__(self, timeout=10):
         self.client = get_docker_client()
         self.timeout = timeout
