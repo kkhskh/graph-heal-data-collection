@@ -1,21 +1,15 @@
-from .base import RecoverySystemAdapter
+from .base import RecoveryAdapter
 import docker
 import logging
+from .base import RecoveryAdapter
+from graph_heal.utils import get_docker_client
 
 logger = logging.getLogger(__name__)
 
-class DockerAdapter(RecoverySystemAdapter):
-    def __init__(self, docker_client: docker.DockerClient = None):
-        if docker_client:
-            self.client = docker_client
-        else:
-            try:
-                # Let docker-py figure out the correct socket/pipe from your environment
-                self.client = docker.from_env()
-            except docker.errors.DockerException as e:
-                logger.warning(f"docker.from_env() failed: {e}. Falling back to default Unix socket.")
-                # Fallback to the default Unix socket explicitly
-                self.client = docker.DockerClient(base_url='unix://var/run/docker.sock')
+class DockerAdapter(RecoveryAdapter):
+    def __init__(self, timeout=10):
+        self.client = get_docker_client()
+        self.timeout = timeout
 
     def restart_service(self, service_name: str, **kwargs):
         """Restarts a docker container."""
