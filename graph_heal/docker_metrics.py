@@ -4,15 +4,16 @@ from typing import Dict, Optional
 import time
 from datetime import datetime
 import logging
+from graph_heal.utils import get_docker_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DockerMetricsCollector:
-    def __init__(self):
-        """Initialize Docker client and metrics collection"""
-        self.client = docker.from_env()
+class DockerMetrics:
+    def __init__(self, services):
+        self.services = services
+        self.client = get_docker_client()
         self.container_stats = {}
         self.host_stats = {}
         
