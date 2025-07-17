@@ -101,3 +101,9 @@ jobs:
       run: |
         docker-compose down
         docker system prune -f 
+
+    - name: Docker Info (Debug)
+      run: |
+        docker info || true
+        echo "DOCKER_HOST=$DOCKER_HOST"
+        ls -l /var/run/docker.sock || true
