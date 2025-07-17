@@ -106,4 +106,7 @@ jobs:
       run: |
         docker info || true
         echo "DOCKER_HOST=$DOCKER_HOST"
-        ls -l /var/run/docker.sock || true
+        ls -l /var/run/docker.sock || true 
+
+    - name: List running containers (Debug)
+      run: docker ps -a 
