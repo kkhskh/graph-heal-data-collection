@@ -8,6 +8,7 @@ from datetime import datetime
 import numpy as np
 import docker
 import pandas as pd
+from graph_heal.utils import get_docker_client
 from graph_heal.graph_model import ServiceGraph, RealTimeServiceGraph
 from graph_heal.anomaly_detection import AnomalyDetector
 from graph_heal.fault_localization import FaultLocalizer
@@ -41,10 +42,10 @@ class ExperimentRunner:
     def __init__(self, services=None, duration_secs=300):
         self.services = services if services is not None else DEFAULT_SERVICES
         self.duration_secs = duration_secs
-        self.docker_client = docker.from_env()
+        self.docker_client = get_docker_client()
         self.graph = self._initialize_service_graph(self.services)
         self.graph_analyzer = FaultLocalizer(self.graph)
-        self.anomaly_detector = AnomalyDetector(self.services.keys())
+        self.anomaly_detector = AnomalyDetector(list(self.services.keys()))
         
         adapter_name = os.getenv("RECOVERY_ADAPTER", "docker").lower()
         if adapter_name == "kubernetes":
@@ -383,4 +384,4 @@ def main():
     print("Experiments completed.")
 
 if __name__ == "__main__":
-    main()   
+    main() 
