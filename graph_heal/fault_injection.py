@@ -10,6 +10,7 @@ import os
 import uuid
 import subprocess
 import platform
+from graph_heal.utils import get_docker_client
 
 # Configure logging
 logging.basicConfig(
@@ -96,7 +97,7 @@ class FaultInjector:
             return None
 
         try:
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
 
             if fault_type == "cpu_stress":
@@ -146,7 +147,7 @@ class FaultInjector:
             return False
 
         try:
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
 
             if fault["type"] == "cpu_stress":
@@ -171,4 +172,3 @@ class FaultInjector:
         with open(fault_file, 'w') as f:
             json.dump(fault, f, indent=2)
 
-# Keep other classes if they exist and are needed, but for the ablation study this is sufficient.
