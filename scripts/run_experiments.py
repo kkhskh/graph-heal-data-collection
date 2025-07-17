@@ -199,22 +199,26 @@ class ExperimentRunner:
                     # Get metrics using docker stats
                     metrics = self._get_docker_stats(container_name) or {}
                     
-                    # Metrics collection can be stubbed or replaced with CLI/stat parsing if needed
+                    # Metrics collection must be nested under a 'metrics' key for the detector
                     service_states[service] = {
                         'status': status,
                         'health': health,
-                        'cpu_usage': metrics.get('cpu_usage'),
-                        'memory_usage': metrics.get('memory_usage'),
-                        'network_latency': None # Still not measured directly
+                        'metrics': {
+                            'cpu_usage': metrics.get('cpu_usage'),
+                            'memory_usage': metrics.get('memory_usage'),
+                            'network_latency': None # Still not measured directly
+                        }
                     }
                 except Exception as e:
                     print(f"Error getting state for {service}: {e}")
                     service_states[service] = {
                         'status': 'unknown',
                         'health': 'unknown',
-                        'cpu_usage': None,
-                        'memory_usage': None,
-                        'network_latency': None,
+                        'metrics': {
+                            'cpu_usage': None,
+                            'memory_usage': None,
+                            'network_latency': None,
+                        },
                         'error': str(e)
                     }
             
