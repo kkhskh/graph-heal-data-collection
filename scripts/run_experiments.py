@@ -16,6 +16,8 @@ from graph_heal.recovery.docker_adapter import DockerAdapter
 from graph_heal.recovery.kubernetes_adapter import KubernetesAdapter
 from graph_heal.service_monitor import ServiceMonitor
 import argparse
+from typing import Optional, Dict
+import logging
 
 # Default service configuration
 DEFAULT_SERVICES = {
@@ -24,6 +26,8 @@ DEFAULT_SERVICES = {
     'service-c': {'port': 5003, 'dependencies': ['service-d']},
     'service-d': {'port': 5004, 'dependencies': []}
 }
+
+logger = logging.getLogger(__name__)
 
 class ExperimentRunner:
     def _initialize_service_graph(self, services) -> ServiceGraph:
@@ -72,6 +76,24 @@ class ExperimentRunner:
             }
         }
         
+    def _get_docker_stats(self, container_name: str) -> Optional[Dict[str, float]]:
+        """Get CPU and Memory usage for a container using `docker stats`."""
+        try:
+            cmd = ["docker", "stats", "--no-stream", "--format", "{{json .}}", container_name]
+            result = subprocess.check_output(cmd, stderr=subprocess.PIPE).decode().strip()
+            if not result:
+                return None
+            
+            stats = json.loads(result)
+            
+            cpu_usage = float(stats.get('CPUPerc', '0.0%').replace('%', ''))
+            memory_usage = float(stats.get('MemPerc', '0.0%').replace('%', ''))
+            
+            return {'cpu_usage': cpu_usage, 'memory_usage': memory_usage}
+        except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Could not retrieve or parse stats for {container_name}: {e}")
+            return None
+
     def _docker_update(self, container, cpu_quota=None, mem_limit=None, memswap_limit=None):
         cmd = ["docker", "update"]
         if cpu_quota is not None:
@@ -173,19 +195,26 @@ class ExperimentRunner:
                     info = _json.loads(inspect)[0]
                     status = info['State']['Status']
                     health = info['State'].get('Health', {}).get('Status', 'unknown')
+                    
+                    # Get metrics using docker stats
+                    metrics = self._get_docker_stats(container_name) or {}
+                    
                     # Metrics collection can be stubbed or replaced with CLI/stat parsing if needed
                     service_states[service] = {
                         'status': status,
                         'health': health,
-                        'cpu_usage': None,
-                        'memory_usage': None,
-                        'network_latency': None
+                        'cpu_usage': metrics.get('cpu_usage'),
+                        'memory_usage': metrics.get('memory_usage'),
+                        'network_latency': None # Still not measured directly
                     }
                 except Exception as e:
                     print(f"Error getting state for {service}: {e}")
                     service_states[service] = {
                         'status': 'unknown',
                         'health': 'unknown',
+                        'cpu_usage': None,
+                        'memory_usage': None,
+                        'network_latency': None,
                         'error': str(e)
                     }
             
@@ -238,31 +267,6 @@ class ExperimentRunner:
             writer.writeheader()
             writer.writerows(self.fault_labels)
         print(f"Fault labels saved to {output_file}")
-    
-    def _get_container_metrics(self, container, metric_type):
-        """Get container metrics using docker stats"""
-        try:
-            # Map service names to container names
-            container_name = container.name.replace('_', '-') # Ensure hyphenated name
-            container = subprocess.check_output(["docker", "inspect", container_name]).decode()
-            import json as _json
-            info = _json.loads(container)[0]
-            if metric_type == 'cpu':
-                cpu_delta = info['CpuStats']['CpuUsage']['TotalUsage'] - \
-                           info['PreCpuStats']['CpuUsage']['TotalUsage']
-                system_delta = info['CpuStats']['SystemCpuUsage'] - \
-                             info['PreCpuStats']['SystemCpuUsage']
-                if system_delta > 0:
-                    return (cpu_delta / system_delta) * 100
-            elif metric_type == 'memory':
-                return (info['MemoryStats']['Usage'] / info['MemoryStats']['Limit']) * 100
-            elif metric_type == 'network':
-                # Simple network latency check
-                return 0  # Placeholder
-        except Exception as e:
-            print(f"Error getting metrics for {container_name}: {e}")
-            pass
-        return 0
     
     def _update_results(self, results: dict, service_states: dict, 
                        graph_predictions: dict, stat_predictions: dict):
