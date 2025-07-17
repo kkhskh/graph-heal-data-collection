@@ -1,14 +1,13 @@
 import sys
 import os
+import subprocess
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import json
 import time
 import csv
 from datetime import datetime
 import numpy as np
-import docker
 import pandas as pd
-from graph_heal.utils import get_docker_client
 from graph_heal.graph_model import ServiceGraph, RealTimeServiceGraph
 from graph_heal.anomaly_detection import AnomalyDetector
 from graph_heal.fault_localization import FaultLocalizer
@@ -42,7 +41,6 @@ class ExperimentRunner:
     def __init__(self, services=None, duration_secs=300):
         self.services = services if services is not None else DEFAULT_SERVICES
         self.duration_secs = duration_secs
-        self.docker_client = get_docker_client()
         self.graph = self._initialize_service_graph(self.services)
         self.graph_analyzer = FaultLocalizer(self.graph)
         self.anomaly_detector = AnomalyDetector(list(self.services.keys()))
@@ -54,7 +52,7 @@ class ExperimentRunner:
             adapter = DockerAdapter()
 
         self.recovery_system = EnhancedRecoverySystem(self.graph, adapter=adapter)
-        self.monitor = ServiceMonitor(self.services, self.docker_client)
+        self.monitor = None  # ServiceMonitor not used with CLI
         self.event_log = []
         self.fault_labels = []
         
@@ -74,6 +72,24 @@ class ExperimentRunner:
             }
         }
         
+    def _docker_update(self, container, cpu_quota=None, mem_limit=None, memswap_limit=None):
+        cmd = ["docker", "update"]
+        if cpu_quota is not None:
+            cmd += [f"--cpu-quota={cpu_quota}"]
+        if mem_limit is not None:
+            cmd += [f"--memory={mem_limit}"]
+        if memswap_limit is not None:
+            cmd += [f"--memory-swap={memswap_limit}"]
+        cmd.append(container)
+        subprocess.run(cmd, check=True)
+
+    def _docker_exec(self, container, exec_cmd):
+        cmd = ["docker", "exec", container] + exec_cmd
+        subprocess.run(cmd, check=True)
+
+    def _docker_restart(self, container):
+        subprocess.run(["docker", "restart", container], check=True)
+
     def run_experiment(self, experiment_id: int, fault_type: str = 'cpu', target_service: str = None):
         """Run a single experiment and collect metrics"""
         print(f"\nRunning experiment {experiment_id} with {fault_type} fault...")
@@ -130,13 +146,12 @@ class ExperimentRunner:
         # Inject fault using Docker's built-in capabilities
         try:
             container_name = target_service
-            container = self.docker_client.containers.get(container_name)
             if fault_type == 'cpu':
-                container.update(cpu_quota=90000)  # 90% CPU limit
+                self._docker_update(container_name, cpu_quota=90000)  # 90% CPU limit
             elif fault_type == 'memory':
-                container.update(mem_limit='512m', memswap_limit='512m')
+                self._docker_update(container_name, mem_limit='512m', memswap_limit='512m')
             elif fault_type == 'network':
-                container.exec_run('tc qdisc add dev eth0 root netem delay 100ms')
+                self._docker_exec(container_name, ['tc', 'qdisc', 'add', 'dev', 'eth0', 'root', 'netem', 'delay', '100ms'])
         except Exception as e:
             print(f"Error injecting fault: {e}")
             return results
@@ -148,13 +163,19 @@ class ExperimentRunner:
             service_states = {}
             for service in self.services:
                 try:
-                    container = self.docker_client.containers.get(service)
+                    # Use docker inspect to get status and health
+                    inspect = subprocess.check_output(["docker", "inspect", service]).decode()
+                    import json as _json
+                    info = _json.loads(inspect)[0]
+                    status = info['State']['Status']
+                    health = info['State'].get('Health', {}).get('Status', 'unknown')
+                    # Metrics collection can be stubbed or replaced with CLI/stat parsing if needed
                     service_states[service] = {
-                        'status': container.status,
-                        'health': container.attrs.get('State', {}).get('Health', {}).get('Status', 'unknown'),
-                        'cpu_usage': self._get_container_metrics(container, 'cpu'),
-                        'memory_usage': self._get_container_metrics(container, 'memory'),
-                        'network_latency': self._get_container_metrics(container, 'network')
+                        'status': status,
+                        'health': health,
+                        'cpu_usage': None,
+                        'memory_usage': None,
+                        'network_latency': None
                     }
                 except Exception as e:
                     print(f"Error getting state for {service}: {e}")
@@ -190,13 +211,12 @@ class ExperimentRunner:
         
         # Clean up
         try:
-            container = self.docker_client.containers.get(target_service)
             if fault_type == 'cpu':
-                container.update(cpu_quota=0)  # Reset CPU limit
+                self._docker_update(target_service, cpu_quota=0)  # Reset CPU limit
             elif fault_type == 'memory':
-                container.update(mem_limit='1g', memswap_limit='1g')  # Reset memory limit
+                self._docker_update(target_service, mem_limit='1g', memswap_limit='1g')  # Reset memory limit
             elif fault_type == 'network':
-                container.exec_run('tc qdisc del dev eth0 root')
+                self._docker_exec(target_service, ['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'])
         except Exception as e:
             print(f"Error cleaning up: {e}")
         
@@ -215,17 +235,18 @@ class ExperimentRunner:
         try:
             # Map service names to container names
             container_name = f"service_{container.name.split('_')[-1]}" if container.name.startswith('container_') else container.name
-            container = self.docker_client.containers.get(container_name)
-            stats = container.stats(stream=False)
+            container = subprocess.check_output(["docker", "inspect", container_name]).decode()
+            import json as _json
+            info = _json.loads(container)[0]
             if metric_type == 'cpu':
-                cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - \
-                           stats['precpu_stats']['cpu_usage']['total_usage']
-                system_delta = stats['cpu_stats']['system_cpu_usage'] - \
-                             stats['precpu_stats']['system_cpu_usage']
+                cpu_delta = info['CpuStats']['CpuUsage']['TotalUsage'] - \
+                           info['PreCpuStats']['CpuUsage']['TotalUsage']
+                system_delta = info['CpuStats']['SystemCpuUsage'] - \
+                             info['PreCpuStats']['SystemCpuUsage']
                 if system_delta > 0:
                     return (cpu_delta / system_delta) * 100
             elif metric_type == 'memory':
-                return (stats['memory_stats']['usage'] / stats['memory_stats']['limit']) * 100
+                return (info['MemoryStats']['Usage'] / info['MemoryStats']['Limit']) * 100
             elif metric_type == 'network':
                 # Simple network latency check
                 return 0  # Placeholder
