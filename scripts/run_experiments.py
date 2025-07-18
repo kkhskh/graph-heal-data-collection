@@ -21,10 +21,10 @@ import logging
 
 # Default service configuration
 DEFAULT_SERVICES = {
-    'service-a': {'port': 5001, 'dependencies': ['service-b', 'service-c']},
-    'service-b': {'port': 5002, 'dependencies': ['service-d']},
-    'service-c': {'port': 5003, 'dependencies': ['service-d']},
-    'service-d': {'port': 5004, 'dependencies': []}
+    'service_a': {'port': 5001, 'dependencies': ['service_b', 'service_c']},
+    'service_b': {'port': 5002, 'dependencies': ['service_d']},
+    'service_c': {'port': 5003, 'dependencies': ['service_d']},
+    'service_d': {'port': 5004, 'dependencies': []}
 }
 
 logger = logging.getLogger(__name__)
