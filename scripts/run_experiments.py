@@ -384,59 +384,38 @@ class ExperimentRunner:
         print(f"Metrics saved to {metrics_filename}")
 
 def main():
-    """Main function to run experiments"""
     parser = argparse.ArgumentParser(description="Run fault injection experiments.")
-    parser.add_argument(
-        '--num-experiments', type=int, default=100,
-        help='Total number of experiments to run for each fault type.'
-    )
-    parser.add_argument(
-        '--start-id', type=int, default=0,
-        help='Starting experiment ID.'
-    )
-    parser.add_argument(
-        '--end-id', type=int, default=None,
-        help='Ending experiment ID. If not provided, it defaults to start_id + num_experiments.'
-    )
-    parser.add_argument(
-        '--services', type=str, default='service-a service-b service-c service-d',
-        help='Space-separated list of services to inject faults into.'
-    )
-    parser.add_argument(
-        '--duration', type=int, default=300,
-        help='Duration in seconds for each fault injection experiment.'
-    )
+    parser.add_argument('--duration', type=int, default=300, help='Duration of each experiment in seconds.')
+    parser.add_argument('--services', type=str, default='service-a service-b service-c service-d', help='Space-separated list of services to target.')
+    parser.add_argument('--start-id', type=int, default=0, help='Starting experiment ID.')
+    parser.add_argument('--end-id', type=int, default=99, help='Ending experiment ID.')
     args = parser.parse_args()
 
-    if args.end_id is None:
-        args.end_id = args.start_id + args.num_experiments
+    # Configure logging
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    # Parse services into the required format
-    service_list = args.services.split()
-    services = {}
-    for service in service_list:
-        if service in DEFAULT_SERVICES:
-            services[service] = DEFAULT_SERVICES[service]
+    services_list = args.services.split(' ')
+    services_config = {service: DEFAULT_SERVICES[service] for service in services_list if service in DEFAULT_SERVICES}
     
-    if not services:
-        print("No valid services specified. Using default services.")
-        services = DEFAULT_SERVICES
-
-    # Initialize experiment runner
-    runner = ExperimentRunner(services=services, duration_secs=args.duration)
+    runner = ExperimentRunner(services=services_config, duration_secs=args.duration)
     
+    # Define the sequence of fault types
     fault_types = ['cpu', 'memory', 'network']
     
-    print(f"Running experiments from ID {args.start_id} to {args.end_id - 1}...")
+    # Main experiment loop
+    experiment_id = args.start_id
+    while experiment_id <= args.end_id:
+        for service in services_list:
+            if experiment_id > args.end_id:
+                break
+            fault_type = fault_types[experiment_id % len(fault_types)]
+            runner.run_experiment(experiment_id, fault_type, service)
+            experiment_id += 1
 
-    for i in range(args.start_id, args.end_id):
-        for fault in fault_types:
-            for service in services:
-                runner.run_experiment(experiment_id=i, fault_type=fault, target_service=service)
-    
-    # Save fault labels
-    runner.save_fault_labels()
-    print("Experiments completed.")
+    # Save all collected fault labels at the end
+    runner.save_fault_labels('fault_labels.csv')
+    print("Experiments complete. Results saved.")
 
 if __name__ == "__main__":
     main() 
