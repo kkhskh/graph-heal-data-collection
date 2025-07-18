@@ -6,7 +6,7 @@ on:
       hours:
         description: 'Hours to run'
         required: true
-        default: '24'
+        default: '0.67'
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
@@ -87,6 +87,7 @@ jobs:
         python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID --duration $(( ${{ github.event.inputs.hours }} * 3600 / 4 )) --services "${{ github.event.inputs.services }}"
     
     - name: Upload results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: fault-injection-results-batch-${{ matrix.batch }}
