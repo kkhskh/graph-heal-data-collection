@@ -123,11 +123,11 @@ class ExperimentRunner:
         # Correct for docker-compose naming convention (e.g., service_a -> service-a)
         target_service = target_service.replace('_', '-')
         
-        # Initialize experiment results
+        # Initialize experiment results with proper structure
         results = {
             'experiment_id': experiment_id,
             'fault_type': fault_type,
-            'timestamp': time.time(), # Use numeric timestamp for calculations
+            'timestamp': time.time(),
             'target_service': target_service,
             'ground_truth': {
                 'fault_source': target_service,
@@ -135,9 +135,9 @@ class ExperimentRunner:
                 'propagation_delays': {},
                 'cross_layer_faults': [],
                 'cascading_failures': [],
-                'root_causes': [],
+                'root_causes': [target_service],  # Initialize with the target service
                 'detection_times': [],
-                'localization_times': {},
+                'localization_times': [],  # Changed to list
                 'multi_hop_paths': []
             },
             'graph_predictions': {
@@ -146,7 +146,7 @@ class ExperimentRunner:
                 'cross_layer_faults': [],
                 'cascading_failures': [],
                 'root_causes': [],
-                'localization_times': {},
+                'localization_times': [],  # Changed to list
                 'multi_hop_paths': []
             },
             'statistical_predictions': {
@@ -155,7 +155,7 @@ class ExperimentRunner:
                 'cross_layer_faults': [],
                 'cascading_failures': [],
                 'root_causes': [],
-                'localization_times': {},
+                'localization_times': [],  # Changed to list
                 'multi_hop_paths': []
             }
         }
@@ -171,9 +171,9 @@ class ExperimentRunner:
         
         # Inject fault using Docker's built-in capabilities
         try:
-            container_name = target_service.replace('_', '-') # Ensure hyphenated name
+            container_name = target_service.replace('_', '-')
             if fault_type == 'cpu':
-                self._docker_update(container_name, cpu_quota=90000)  # 90% CPU limit
+                self._docker_update(container_name, cpu_quota=90000)
             elif fault_type == 'memory':
                 self._docker_update(container_name, mem_limit='512m', memswap_limit='512m')
             elif fault_type == 'network':
@@ -184,30 +184,30 @@ class ExperimentRunner:
         
         # Monitor propagation and collect metrics
         propagation_start = time.time()
+        graph_localization_recorded = False
+        stat_localization_recorded = False
+        
         while time.time() - propagation_start < self.duration_secs:
             # Get current service states
             service_states = {}
             for service in self.services:
                 try:
-                    # Use docker inspect to get status and health
-                    container_name = service.replace('_', '-') # Ensure hyphenated name
+                    container_name = service.replace('_', '-')
                     inspect = subprocess.check_output(["docker", "inspect", container_name]).decode()
-                    import json as _json
-                    info = _json.loads(inspect)[0]
+                    info = json.loads(inspect)[0]
                     status = info['State']['Status']
                     health = info['State'].get('Health', {}).get('Status', 'unknown')
                     
                     # Get metrics using docker stats
                     metrics = self._get_docker_stats(container_name) or {}
                     
-                    # Metrics collection must be nested under a 'metrics' key for the detector
                     service_states[service] = {
                         'status': status,
                         'health': health,
                         'metrics': {
                             'cpu_usage': metrics.get('cpu_usage'),
                             'memory_usage': metrics.get('memory_usage'),
-                            'network_latency': None # Still not measured directly
+                            'network_latency': None
                         }
                     }
                 except Exception as e:
@@ -223,27 +223,43 @@ class ExperimentRunner:
                         'error': str(e)
                     }
             
-            # Update analyzers and get predictions
-            # The logic here needs to be corrected. 
-            # First, detect anomalies. Then, localize faults.
-            anomalies = self.anomaly_detector.detect_anomalies(service_states)
+            print(f"[DEBUG] service_statuses: {service_states}")
             
-            # The GraphBasedFaultLocalizer does not have `update_metrics`. 
-            # It should be used to localize faults based on anomalies.
+            # Detect anomalies
+            anomalies = self.anomaly_detector.detect_anomalies(service_states)
+            print(f"[DEBUG] StatisticalAnomalyDetector detected {len(anomalies)} anomalies: {anomalies}")
+            
+            # Localize faults using graph analyzer
             root_causes = self.graph_analyzer.localize_faults(service_states, anomalies)
             
-            # For the experiment, we care about the root cause predictions
+            # Record localization times (only once per experiment)
+            current_time = time.time() - propagation_start
+            
+            if root_causes and not graph_localization_recorded:
+                results['graph_predictions']['localization_times'].append(current_time)
+                results['graph_predictions']['root_causes'] = [cause['service_id'] for cause in root_causes]
+                graph_localization_recorded = True
+            
+            if anomalies and not stat_localization_recorded:
+                results['statistical_predictions']['localization_times'].append(current_time)
+                results['statistical_predictions']['root_causes'] = [a['service_id'] for a in anomalies if 'service_id' in a]
+                stat_localization_recorded = True
+            
+            # Update predictions
             graph_predictions = {
-                'root_causes': [cause['service_id'] for cause in root_causes]
+                'root_causes': [cause['service_id'] for cause in root_causes],
+                'propagated_services': [cause['service_id'] for cause in root_causes]
             }
 
-            stat_predictions_raw = self.anomaly_detector.detect_anomalies(service_states)
-            stat_predictions = {'propagated_services': [a['service_id'] for a in stat_predictions_raw if 'service_id' in a]}
+            stat_predictions = {
+                'propagated_services': [a['service_id'] for a in anomalies if 'service_id' in a],
+                'root_causes': [a['service_id'] for a in anomalies if 'service_id' in a]
+            }
             
-            # Update results and calculate metrics
+            # Update results
             self._update_results(results, service_states, graph_predictions, stat_predictions)
             
-            time.sleep(1)  # Check every second
+            time.sleep(1)
         
         # Calculate final metrics
         self._calculate_metrics(results)
@@ -253,11 +269,11 @@ class ExperimentRunner:
         
         # Clean up
         try:
-            container_name = target_service.replace('_', '-') # Ensure hyphenated name
+            container_name = target_service.replace('_', '-')
             if fault_type == 'cpu':
-                self._docker_update(container_name, cpu_quota=0)  # Reset CPU limit
+                self._docker_update(container_name, cpu_quota=0)
             elif fault_type == 'memory':
-                self._docker_update(container_name, mem_limit='1g', memswap_limit='1g')  # Reset memory limit
+                self._docker_update(container_name, mem_limit='1g', memswap_limit='1g')
             elif fault_type == 'network':
                 self._docker_exec(container_name, ['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'])
         except Exception as e:
@@ -299,69 +315,86 @@ class ExperimentRunner:
         for service in stat_predictions.get('propagated_services', []):
             if service not in results['statistical_predictions']['propagated_services']:
                 results['statistical_predictions']['propagated_services'].append(service)
-                results['statistical_predictions']['localization_times'][service] = current_time - results['timestamp']
                 results['statistical_predictions']['propagation_delays'][service] = current_time - results['timestamp']
     
     def _calculate_metrics(self, results: dict):
         """Calculate final performance metrics for the experiment."""
-        # Propagation Detection Accuracy
-        graph_accuracy = len(set(results['graph_predictions']['propagated_services']) & 
-                           set(results['ground_truth']['propagated_services'])) / \
-                        len(results['ground_truth']['propagated_services']) \
-                        if results['ground_truth']['propagated_services'] else 0
-        
-        stat_accuracy = len(set(results['statistical_predictions']['propagated_services']) & 
-                          set(results['ground_truth']['propagated_services'])) / \
-                       len(results['ground_truth']['propagated_services']) \
-                       if results['ground_truth']['propagated_services'] else 0
-        
-        self.metrics['propagation_metrics']['propagation_detection_accuracy'].append({
-            'graph': graph_accuracy,
-            'statistical': stat_accuracy
-        })
-        
-        # Propagation Delay Estimation Error
-        graph_delay_error = np.mean([
-            abs(results['graph_predictions']['propagation_delays'].get(s, 0) - 
-                results['ground_truth']['propagation_delays'].get(s, 0))
-            for s in results['ground_truth']['propagated_services']
-        ]) if results['ground_truth']['propagated_services'] else 0
-        
-        stat_delay_error = np.mean([
-            abs(results['statistical_predictions']['propagation_delays'].get(s, 0) - 
-                results['ground_truth']['propagation_delays'].get(s, 0))
-            for s in results['ground_truth']['propagated_services']
-        ]) if results['ground_truth']['propagated_services'] else 0
-        
-        self.metrics['propagation_metrics']['propagation_delay_estimation_error'].append({
-            'graph': graph_delay_error,
-            'statistical': stat_delay_error
-        })
-        
-        # Root Cause Accuracy
-        graph_root_cause = results['graph_predictions']['root_causes'][0] if results['graph_predictions']['root_causes'] else None
-        stat_root_cause = results['statistical_predictions']['root_causes'][0] if results['statistical_predictions']['root_causes'] else None
-        true_root_cause = results['ground_truth']['root_causes'][0] if results['ground_truth']['root_causes'] else None
-        
-        self.metrics['localization_metrics']['root_cause_accuracy'].append({
-            'graph': 1.0 if graph_root_cause == true_root_cause else 0.0,
-            'statistical': 1.0 if stat_root_cause == true_root_cause else 0.0
-        })
-        
-        # Localization Time
-        self.metrics['localization_metrics']['localization_time'].append({
-            'graph': results['graph_predictions']['localization_times'][0] if results['graph_predictions']['localization_times'] else float('inf'),
-            'statistical': results['statistical_predictions']['localization_times'][0] if results['statistical_predictions']['localization_times'] else float('inf')
-        })
+        try:
+            # Propagation Detection Accuracy
+            graph_accuracy = len(set(results['graph_predictions']['propagated_services']) & 
+                               set(results['ground_truth']['propagated_services'])) / \
+                            max(len(results['ground_truth']['propagated_services']), 1)
+            
+            stat_accuracy = len(set(results['statistical_predictions']['propagated_services']) & 
+                              set(results['ground_truth']['propagated_services'])) / \
+                           max(len(results['ground_truth']['propagated_services']), 1)
+            
+            self.metrics['propagation_metrics']['propagation_detection_accuracy'].append({
+                'graph': graph_accuracy,
+                'statistical': stat_accuracy
+            })
+            
+            # Propagation Delay Estimation Error
+            graph_delay_error = np.mean([
+                abs(results['graph_predictions']['propagation_delays'].get(s, 0) - 
+                    results['ground_truth']['propagation_delays'].get(s, 0))
+                for s in results['ground_truth']['propagated_services']
+            ]) if results['ground_truth']['propagated_services'] else 0
+            
+            stat_delay_error = np.mean([
+                abs(results['statistical_predictions']['propagation_delays'].get(s, 0) - 
+                    results['ground_truth']['propagation_delays'].get(s, 0))
+                for s in results['ground_truth']['propagated_services']
+            ]) if results['ground_truth']['propagated_services'] else 0
+            
+            self.metrics['propagation_metrics']['propagation_delay_estimation_error'].append({
+                'graph': graph_delay_error,
+                'statistical': stat_delay_error
+            })
+            
+            # Root Cause Accuracy
+            graph_root_cause = results['graph_predictions']['root_causes'][0] if results['graph_predictions']['root_causes'] else None
+            stat_root_cause = results['statistical_predictions']['root_causes'][0] if results['statistical_predictions']['root_causes'] else None
+            true_root_cause = results['ground_truth']['root_causes'][0] if results['ground_truth']['root_causes'] else None
+            
+            self.metrics['localization_metrics']['root_cause_accuracy'].append({
+                'graph': 1.0 if graph_root_cause == true_root_cause else 0.0,
+                'statistical': 1.0 if stat_root_cause == true_root_cause else 0.0
+            })
+            
+            # Localization Time - Now safely accessing lists
+            graph_time = results['graph_predictions']['localization_times'][0] if results['graph_predictions']['localization_times'] else float('inf')
+            stat_time = results['statistical_predictions']['localization_times'][0] if results['statistical_predictions']['localization_times'] else float('inf')
+            
+            self.metrics['localization_metrics']['localization_time'].append({
+                'graph': graph_time,
+                'statistical': stat_time
+            })
+            
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(f"Error calculating metrics: {e}")
+            # Add default metrics to maintain consistency
+            self.metrics['propagation_metrics']['propagation_detection_accuracy'].append({
+                'graph': 0.0,
+                'statistical': 0.0
+            })
+            self.metrics['propagation_metrics']['propagation_delay_estimation_error'].append({
+                'graph': float('inf'),
+                'statistical': float('inf')
+            })
+            self.metrics['localization_metrics']['root_cause_accuracy'].append({
+                'graph': 0.0,
+                'statistical': 0.0
+            })
+            self.metrics['localization_metrics']['localization_time'].append({
+                'graph': float('inf'),
+                'statistical': float('inf')
+            })
     
     def _save_results(self, results: dict, experiment_id: int, fault_type: str):
         """Append results to CSV files, creating them if they don't exist."""
         output_dir = "data/fault_injection"
         os.makedirs(output_dir, exist_ok=True)
-
-        # File paths
-        results_file = os.path.join(output_dir, "experimental_results.csv")
-        propagation_file = os.path.join(output_dir, "propagation_metrics.csv")
 
         # Convert timestamp objects to strings for JSON serialization
         if isinstance(results.get('timestamp'), float):
@@ -396,7 +429,23 @@ def main():
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     services_list = args.services.split(' ')
-    services_config = {service: DEFAULT_SERVICES[service] for service in services_list if service in DEFAULT_SERVICES}
+    
+    # Map service names back to underscore format for internal use
+    service_name_map = {
+        'service-a': 'service_a',
+        'service-b': 'service_b', 
+        'service-c': 'service_c',
+        'service-d': 'service_d'
+    }
+    
+    mapped_services = []
+    for service in services_list:
+        if service in service_name_map:
+            mapped_services.append(service_name_map[service])
+        elif service in DEFAULT_SERVICES:
+            mapped_services.append(service)
+    
+    services_config = {service: DEFAULT_SERVICES[service] for service in mapped_services if service in DEFAULT_SERVICES}
     
     runner = ExperimentRunner(services=services_config, duration_secs=args.duration)
     
@@ -406,7 +455,7 @@ def main():
     # Main experiment loop
     experiment_id = args.start_id
     while experiment_id <= args.end_id:
-        for service in services_list:
+        for service in mapped_services:
             if experiment_id > args.end_id:
                 break
             fault_type = fault_types[experiment_id % len(fault_types)]
@@ -418,4 +467,4 @@ def main():
     print("Experiments complete. Results saved.")
 
 if __name__ == "__main__":
-    main() 
+    main()
