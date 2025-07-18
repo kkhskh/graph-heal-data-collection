@@ -267,6 +267,10 @@ class ExperimentRunner:
 
     def save_fault_labels(self, output_file='fault_labels.csv'):
         """Save fault injection labels to CSV file"""
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
         with open(output_file, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=['timestamp', 'service', 'fault_type', 'duration'])
             writer.writeheader()
@@ -351,7 +355,14 @@ class ExperimentRunner:
         })
     
     def _save_results(self, results: dict, experiment_id: int, fault_type: str):
-        """Save experiment results to a JSON file."""
+        """Append results to CSV files, creating them if they don't exist."""
+        output_dir = "data/fault_injection"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # File paths
+        results_file = os.path.join(output_dir, "experimental_results.csv")
+        propagation_file = os.path.join(output_dir, "propagation_metrics.csv")
+
         # Convert timestamp objects to strings for JSON serialization
         if isinstance(results.get('timestamp'), float):
             results['timestamp'] = datetime.fromtimestamp(results['timestamp']).isoformat()
@@ -428,4 +439,4 @@ def main():
     print("Experiments completed.")
 
 if __name__ == "__main__":
-    main()  
+    main() 
