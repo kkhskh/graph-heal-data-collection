@@ -248,7 +248,7 @@ class ExperimentRunner:
         # Calculate final metrics
         self._calculate_metrics(results)
         
-        # Save results
+        # Save results to file
         self._save_results(results, experiment_id, fault_type)
         
         # Clean up
