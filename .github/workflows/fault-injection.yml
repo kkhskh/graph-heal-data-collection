@@ -6,7 +6,7 @@ on:
       hours:
         description: 'Hours to run'
         required: true
-        default: '0.67'
+        default: '0.07'
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
@@ -85,7 +85,7 @@ jobs:
         END_ID=$(( START_ID + 24 ))
         echo "Running experiments from $START_ID to $END_ID"
         DURATION=$(echo "${{ github.event.inputs.hours }} * 3600 / 4" | bc | cut -d'.' -f1)
-        python scripts/run_experiments.py --duration $DURATION --services "${{ github.event.inputs.services }}"
+        python scripts/run_experiments.py --start-id $START_ID --end-id $END_ID --duration $DURATION --services "${{ github.event.inputs.services }}"
     
     - name: Upload results
       if: always()
@@ -111,4 +111,3 @@ jobs:
 
     - name: List running containers (Debug)
       run: docker ps -a 
-
