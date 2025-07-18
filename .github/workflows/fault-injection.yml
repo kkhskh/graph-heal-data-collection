@@ -91,9 +91,8 @@ jobs:
       with:
         name: fault-injection-results-batch-${{ matrix.batch }}
         path: |
+          data/fault_injection/
           fault_labels.csv
-          cloud_fault_injection.log
-          metric_data.csv
         retention-days: 30
     
     - name: Clean up
