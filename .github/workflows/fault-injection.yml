@@ -6,19 +6,23 @@ on:
       experiment_duration_minutes:
         description: 'Duration per experiment (minutes)'
         required: true
-        default: '20'  # 20 minutes per experiment
+        default: '10'  # Reduced to 10 minutes per experiment
       services:
         description: 'Services to inject faults into (space-separated)'
         required: true
         default: 'service_a service_b service_c service_d'
+      experiments_per_batch:
+        description: 'Number of experiments per batch'
+        required: true
+        default: '20'  # Reduced from 25 to 20
 
 jobs:
   fault-injection:
     runs-on: ubuntu-latest
-    timeout-minutes: 700  # ~11.5 hours max per job (buffer for 10-hour runs)
+    timeout-minutes: 330  # 5.5 hours - safely under 6 hour limit
     strategy:
       matrix:
-        batch: [0, 1, 2, 3]  # Split into 4 parallel jobs
+        batch: [0, 1, 2, 3, 4, 5]  # 6 parallel jobs instead of 4
     
     steps:
     - uses: actions/checkout@v4
@@ -55,7 +59,7 @@ jobs:
     - name: Start services
       run: |
         docker-compose up -d
-        sleep 60  # Increased wait time
+        sleep 60
 
     - name: Show container status
       run: |
@@ -65,12 +69,11 @@ jobs:
         docker-compose logs service-c || true
         docker-compose logs service-d || true
 
-    # FIXED: More robust health check with longer timeouts and fallback
     - name: Wait for all services to be healthy
       run: |
         for port in 5001 5002 5003 5004; do
           echo "Waiting for service on port $port to be ready..."
-          timeout=120  # Increased to 2 minutes
+          timeout=120
           while [ $timeout -gt 0 ]; do
             if curl -sf http://localhost:$port/metrics 2>/dev/null; then
               echo "Service on port $port is ready."
@@ -90,13 +93,12 @@ jobs:
           if [ $timeout -le 0 ]; then
             echo "WARNING: Service on port $port failed to start within 2 minutes"
             echo "Continuing anyway - experiment will handle missing services"
-            # Don't exit - continue with experiment
           fi
         done
         echo "Health check completed."
     
     - name: Start monitoring
-      continue-on-error: true  # Don't fail if monitoring fails
+      continue-on-error: true
       run: |
         python scripts/run_monitoring.py &
         sleep 10
@@ -107,25 +109,53 @@ jobs:
         mkdir -p results
         ls -la data/
     
-    # FIXED: Calculate proper timeout based on experiment parameters
-    - name: Calculate experiment timeout
-      id: calc_timeout
+    # Calculate safe parameters for 5.5 hour limit
+    - name: Calculate experiment parameters
+      id: calc_params
       run: |
         DURATION_MINUTES=${{ github.event.inputs.experiment_duration_minutes }}
-        EXPERIMENTS_PER_BATCH=25
+        EXPERIMENTS_PER_BATCH=${{ github.event.inputs.experiments_per_batch }}
+        
+        # Calculate total runtime
         TOTAL_MINUTES=$((DURATION_MINUTES * EXPERIMENTS_PER_BATCH))
         TOTAL_SECONDS=$((TOTAL_MINUTES * 60))
-        # Add 50% buffer for setup/cleanup time
-        TIMEOUT_SECONDS=$((TOTAL_SECONDS + TOTAL_SECONDS / 2))
+        
+        # Add overhead (setup + cleanup per experiment)
+        OVERHEAD_MINUTES=$((EXPERIMENTS_PER_BATCH * 2))  # 2 min overhead per experiment
+        SETUP_CLEANUP_MINUTES=20  # Initial setup + final cleanup
+        TOTAL_WITH_OVERHEAD=$((TOTAL_MINUTES + OVERHEAD_MINUTES + SETUP_CLEANUP_MINUTES))
+        
+        # Safety check - ensure we don't exceed 5 hours of actual runtime
+        MAX_RUNTIME_MINUTES=300  # 5 hours
+        if [ $TOTAL_WITH_OVERHEAD -gt $MAX_RUNTIME_MINUTES ]; then
+          echo "WARNING: Estimated runtime ($TOTAL_WITH_OVERHEAD min) exceeds safe limit ($MAX_RUNTIME_MINUTES min)"
+          echo "Reducing experiments per batch to fit within time limit"
+          
+          AVAILABLE_EXP_TIME=$((MAX_RUNTIME_MINUTES - SETUP_CLEANUP_MINUTES))
+          EXPERIMENTS_PER_BATCH=$(( AVAILABLE_EXP_TIME / (DURATION_MINUTES + 2) ))
+          
+          echo "Adjusted experiments per batch: $EXPERIMENTS_PER_BATCH"
+          TOTAL_MINUTES=$((DURATION_MINUTES * EXPERIMENTS_PER_BATCH))
+          TOTAL_SECONDS=$((TOTAL_MINUTES * 60))
+        fi
+        
+        # Set timeout to 90% of remaining time to job timeout
+        TIMEOUT_SECONDS=$((270 * 60))  # 4.5 hours in seconds (safe buffer)
+        
         echo "duration_seconds=$((DURATION_MINUTES * 60))" >> $GITHUB_OUTPUT
+        echo "experiments_per_batch=$EXPERIMENTS_PER_BATCH" >> $GITHUB_OUTPUT
         echo "timeout_seconds=$TIMEOUT_SECONDS" >> $GITHUB_OUTPUT
-        echo "Expected runtime: $TOTAL_MINUTES minutes ($TOTAL_SECONDS seconds)"
-        echo "Timeout set to: $((TIMEOUT_SECONDS / 60)) minutes ($TIMEOUT_SECONDS seconds)"
+        
+        echo "=== EXPERIMENT PARAMETERS ==="
+        echo "Duration per experiment: $DURATION_MINUTES minutes"
+        echo "Experiments in this batch: $EXPERIMENTS_PER_BATCH"
+        echo "Estimated experiment time: $TOTAL_MINUTES minutes"
+        echo "Timeout set to: $((TIMEOUT_SECONDS / 60)) minutes"
+        echo "Job will auto-terminate at: 330 minutes (5.5 hours)"
     
     - name: Test experiment setup (fallback)
       continue-on-error: true
       run: |
-        # Create and run test script
         cat > test_runner.py << 'EOF'
         #!/usr/bin/env python3
         import sys
@@ -138,7 +168,6 @@ jobs:
             os.makedirs('data/fault_injection', exist_ok=True)
             os.makedirs('results', exist_ok=True)
             
-            # Create fault_labels.csv
             with open('fault_labels.csv', 'w', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=['timestamp', 'service', 'fault_type', 'duration'])
                 writer.writeheader()
@@ -149,7 +178,6 @@ jobs:
                     'duration': 60
                 })
             
-            # Create test result
             test_result = {
                 'experiment_id': 0,
                 'batch': ${{ matrix.batch }},
@@ -168,26 +196,28 @@ jobs:
         
         python test_runner.py
     
-    # FIXED: Proper timeout calculation and error handling
-    - name: Run fault injection with detailed logging
+    - name: Run fault injection experiments
       continue-on-error: true
       run: |
-        START_ID=$(( ${{ matrix.batch }} * 25 ))
-        END_ID=$(( START_ID + 24 ))
-        echo "Running experiments from $START_ID to $END_ID"
-        DURATION=${{ steps.calc_timeout.outputs.duration_seconds }}
-        TIMEOUT=${{ steps.calc_timeout.outputs.timeout_seconds }}
-        echo "Duration per experiment: $DURATION seconds (${{ github.event.inputs.experiment_duration_minutes }} minutes)"
-        echo "Total timeout: $TIMEOUT seconds"
+        EXPERIMENTS_PER_BATCH=${{ steps.calc_params.outputs.experiments_per_batch }}
+        START_ID=$(( ${{ matrix.batch }} * EXPERIMENTS_PER_BATCH ))
+        END_ID=$(( START_ID + EXPERIMENTS_PER_BATCH - 1 ))
+        DURATION=${{ steps.calc_params.outputs.duration_seconds }}
+        TIMEOUT=${{ steps.calc_params.outputs.timeout_seconds }}
         
-        # Ensure duration is at least 10 seconds
+        echo "=== STARTING BATCH ${{ matrix.batch }} ==="
+        echo "Experiments: $START_ID to $END_ID ($EXPERIMENTS_PER_BATCH total)"
+        echo "Duration per experiment: $DURATION seconds"
+        echo "Timeout: $TIMEOUT seconds"
+        echo "Started at: $(date)"
+        
+        # Ensure minimum duration
         if [ "$DURATION" -lt 10 ]; then
           DURATION=10
           echo "Duration adjusted to minimum 10 seconds"
         fi
         
-        # Run with proper timeout and error handling
-        echo "Starting experiments at $(date)"
+        # Run experiments with timeout
         timeout $TIMEOUT python scripts/run_experiments.py \
           --start-id $START_ID \
           --end-id $END_ID \
@@ -196,65 +226,73 @@ jobs:
           2>&1 | tee experiment_output.log
         
         EXIT_CODE=$?
-        echo "Experiment completed at $(date) with exit code: $EXIT_CODE"
+        echo "=== BATCH ${{ matrix.batch }} COMPLETED ==="
+        echo "Finished at: $(date)"
+        echo "Exit code: $EXIT_CODE"
         
         if [ $EXIT_CODE -eq 124 ]; then
-          echo "Experiment timed out after $TIMEOUT seconds"
+          echo "  Experiment timed out after $TIMEOUT seconds"
         elif [ $EXIT_CODE -ne 0 ]; then
-          echo "Experiment failed with error code $EXIT_CODE"
+          echo " Experiment failed with error code $EXIT_CODE"
         else
           echo "Experiment completed successfully"
         fi
     
-    - name: Debug - Check for created files
+    - name: Debug - Check results
       if: always()
       run: |
-        echo "=== Current directory structure ==="
+        echo "=== RESULTS SUMMARY ==="
+        echo "Batch: ${{ matrix.batch }}"
+        echo "Time: $(date)"
+        
+        echo "=== Files created ==="
         find . -name "*.csv" -o -name "*.json" -o -path "*/data/*" -o -path "*/results/*" | head -20
         
-        echo "=== Contents of data directory ==="
+        echo "=== Data directory ==="
         ls -la data/ || echo "No data directory"
         
-        echo "=== Contents of data/fault_injection directory ==="
+        echo "=== Fault injection data ==="
         ls -la data/fault_injection/ || echo "No data/fault_injection directory"
         
-        echo "=== Contents of results directory ==="
+        echo "=== Results directory ==="
         ls -la results/ || echo "No results directory"
         
-        echo "=== Looking for fault_labels.csv ==="
-        find . -name "fault_labels.csv" -ls || echo "No fault_labels.csv found"
+        echo "=== Fault labels ==="
+        if [ -f "fault_labels.csv" ]; then
+          echo "Fault labels file exists:"
+          wc -l fault_labels.csv
+          head -5 fault_labels.csv
+        else
+          echo "No fault_labels.csv found"
+        fi
         
-        echo "=== Last 100 lines of experiment_output.log ==="
-        tail -100 experiment_output.log || echo "No experiment output log"
+        echo "=== Last 50 lines of experiment log ==="
+        tail -50 experiment_output.log 2>/dev/null || echo "No experiment output log"
         
-        echo "=== Docker container status ==="
-        docker-compose ps || true
+        echo "=== Container status ==="
+        docker-compose ps 2>/dev/null || true
     
-    - name: Create minimal test files if none exist
+    - name: Create minimal fallback files
       if: always()
       run: |
-        # Create minimal files to ensure upload works
+        # Ensure we always have something to upload
         if [ ! -f "fault_labels.csv" ]; then
           echo "timestamp,service,fault_type,duration" > fault_labels.csv
-          echo "$(date -Iseconds),test_service,cpu,60" >> fault_labels.csv
-          echo "Created minimal fault_labels.csv"
+          echo "$(date -Iseconds),fallback_service,cpu,60" >> fault_labels.csv
+          echo "Created fallback fault_labels.csv"
         fi
         
         if [ ! -d "data/fault_injection" ] || [ -z "$(ls -A data/fault_injection 2>/dev/null)" ]; then
           mkdir -p data/fault_injection
-          echo '{"test": "data", "batch": ${{ matrix.batch }}, "timestamp": "'$(date -Iseconds)'", "reason": "fallback_creation"}' > data/fault_injection/test_output.json
-          echo "Created minimal test output"
+          echo '{"batch": ${{ matrix.batch }}, "timestamp": "'$(date -Iseconds)'", "status": "fallback_data"}' > data/fault_injection/batch_${{ matrix.batch }}_fallback.json
+          echo "Created fallback data file"
         fi
-        
-        # Show final file structure
-        echo "=== Final file structure for upload ==="
-        ls -la fault_labels.csv data/fault_injection/ || true
     
-    - name: Upload results
+    - name: Upload experiment results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: fault-injection-results-batch-${{ matrix.batch }}
+        name: fault-injection-batch-${{ matrix.batch }}-results
         path: |
           data/
           fault_labels.csv
@@ -262,30 +300,29 @@ jobs:
           experiment_output.log
         retention-days: 30
     
-    - name: Upload logs separately (fallback)
+    - name: Upload debug logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: debug-logs-batch-${{ matrix.batch }}
+        name: fault-injection-batch-${{ matrix.batch }}-logs
         path: |
           experiment_output.log
           *.log
         retention-days: 7
     
-    - name: Clean up
+    - name: Final cleanup
       if: always()
       run: |
-        echo "Cleaning up at $(date)"
-        docker-compose down --timeout 30 || true
-        docker system prune -f || true
+        echo "=== FINAL CLEANUP ==="
+        echo "Batch ${{ matrix.batch }} cleanup started at: $(date)"
+        docker-compose down --timeout 30 2>/dev/null || true
+        docker system prune -f 2>/dev/null || true
+        echo "Cleanup completed at: $(date)"
 
-    - name: Docker Info (Debug)
+    - name: Final status report
       if: always()
       run: |
-        docker info || true
-        echo "DOCKER_HOST=$DOCKER_HOST"
-        ls -l /var/run/docker.sock || true 
-
-    - name: List running containers (Debug)
-      if: always()
-      run: docker ps -a
+        echo "=== BATCH ${{ matrix.batch }} FINAL STATUS ==="
+        echo "Completed at: $(date)"
+        echo "Files for upload:"
+        ls -la fault_labels.csv data/ results/ 2>/dev/null || true
